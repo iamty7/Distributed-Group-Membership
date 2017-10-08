@@ -12,11 +12,13 @@ import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.ConcurrentModificationException;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Scanner;
+import java.util.concurrent.ConcurrentHashMap;
 
 /*
  * MP2 - Distributed Group Membership
@@ -53,13 +55,16 @@ public class DGM {
 		public void run() {
 			try {
 				while (in_group) {
-					for (Node node : successors) {
-						sendMessage(node.hostName, HEARTBEAT, thisNode);
+					synchronized (successors) {
+						for (Node node : successors) {
+							sendMessage(node.hostName, HEARTBEAT, thisNode);
+						}
 					}
+
 					Thread.currentThread().sleep(200);
 				}
 			} catch (InterruptedException e) {
-				// interrupted by the main thread
+
 			} catch (UnknownHostException e) {
 				// e.printStackTrace();
 				// System.out.println("HEARTBEAT target unknown: " +
@@ -86,7 +91,8 @@ public class DGM {
 					node.hostName = message[1];
 					node.timestamp = message[2];
 					node.hashID = Integer.parseInt(message[3]);
-					//System.out.println("New Message Received! " + messageType);
+					// System.out.println("New Message Received! " +
+					// messageType);
 					switch (messageType) {
 					case HEARTBEAT:
 						updateHBRecord(node);
@@ -109,12 +115,6 @@ public class DGM {
 					default:
 						break;
 					}
-					// int cnt = 0;
-					// for (Node member : membershipList) {
-					// if (member != null)
-					// cnt++;
-					// }
-					// System.out.println(cnt + "members!!!!!!!");
 				}
 				ds.close();
 			} catch (SocketException e) {
@@ -133,6 +133,7 @@ public class DGM {
 
 			try {
 				while (in_group) {
+
 					for (Integer key : heartbeatCnt.keySet()) {
 						long curTime = System.currentTimeMillis();
 						if (curTime - heartbeatCnt.get(key) > 1000) {
@@ -140,10 +141,11 @@ public class DGM {
 							markAsFailure(key);
 						}
 					}
+
 					Thread.currentThread().sleep(1000);
 				}
 			} catch (InterruptedException e) {
-				// interrupted by the main thread
+				
 			}
 		}
 
@@ -159,13 +161,16 @@ public class DGM {
 	public void memberLeave(Node node) {
 		if (membershipList[node.hashID] != null) {
 			System.out.println("Node Leaving!" + membershipList[node.hashID].hostName);
-			for (Node successor : successors) {
-				try {
-					sendMessage(successor.hostName, LEAVE, node);
-				} catch (UnknownHostException e) {
-					e.printStackTrace();
+			synchronized (successors) {
+				for (Node successor : successors) {
+					try {
+						sendMessage(successor.hostName, LEAVE, node);
+					} catch (UnknownHostException e) {
+						e.printStackTrace();
+					}
 				}
 			}
+
 			membershipList[node.hashID] = null;
 			selectNeighbors();
 			writeLogs("Member Leave:", node);
@@ -176,71 +181,92 @@ public class DGM {
 		if (membershipList[node.hashID] == null) {
 			membershipList[node.hashID] = node;
 			System.out.println("New Member! " + membershipList[node.hashID].hostName);
-			for (Node successor : successors) {
-				try {
-					sendMessage(successor.hostName, NEWMEMBER, node);
-				} catch (UnknownHostException e) {
-					e.printStackTrace();
+			synchronized (successors) {
+				for (Node successor : successors) {
+					try {
+						sendMessage(successor.hostName, NEWMEMBER, node);
+					} catch (UnknownHostException e) {
+						e.printStackTrace();
+					}
 				}
 			}
+
 			writeLogs("New Member:", node);
 			selectNeighbors();
 		}
 	}
 
 	public void initMembershipList(Node node) {
-		membershipList[node.hashID] = node;
+		synchronized (membershipList) {
+			membershipList[node.hashID] = node;
+		}
 		selectNeighbors();
 	}
 
 	public void newGroupMember(Node node) {
-		for (Node member : membershipList) {
-			try {
-				if (member != null) {
-					System.out.println("sending membership list: " + member.hostName);
-					sendMessage(node.hostName, MEMBERSHIPLIST, member);
+		synchronized (membershipList) {
+			for (Node member : membershipList) {
+				try {
+					if (member != null) {
+						System.out.println("sending membership list: " + member.hostName);
+						sendMessage(node.hostName, MEMBERSHIPLIST, member);
+					}
+				} catch (UnknownHostException e) {
+					e.printStackTrace();
 				}
-			} catch (UnknownHostException e) {
-				e.printStackTrace();
+			}
+			membershipList[node.hashID] = node;
+		}
+
+		synchronized (successors) {
+			for (Node successor : successors) {
+				try {
+					System.out.println("Sending new group to " + successor.hostName);
+					sendMessage(successor.hostName, NEWMEMBER, node);
+				} catch (UnknownHostException e) {
+					e.printStackTrace();
+				}
 			}
 		}
 
-		membershipList[node.hashID] = node;
-
-		for (Node successor : successors) {
-			try {
-				System.out.println("Sending new group to " + successor.hostName);
-				sendMessage(successor.hostName, NEWMEMBER, node);
-			} catch (UnknownHostException e) {
-				e.printStackTrace();
-			}
-		}
 		selectNeighbors();
 
 		writeLogs("New Member:", node);
 	}
 
 	public void updateHBRecord(Node node) {
-		if (heartbeatCnt.containsKey(node.hashID)) {
-			heartbeatCnt.put(node.hashID, System.currentTimeMillis());
+		synchronized (heartbeatCnt) {
+			if (heartbeatCnt.containsKey(node.hashID)) {
+				heartbeatCnt.put(node.hashID, System.currentTimeMillis());
+			}
 		}
+
 	}
 
 	public void markAsFailure(Integer hashID) {
 		if (membershipList[hashID] != null) {
 			Node node = membershipList[hashID];
-			heartbeatCnt.remove(hashID);
-			membershipList[hashID] = null;
+			synchronized (heartbeatCnt) {
+				heartbeatCnt.remove(hashID);
+			}
+
+			synchronized (membershipList) {
+				membershipList[hashID] = null;
+
+			}
 
 			selectNeighbors();
 
-			for (Node successor : successors) {
-				try {
-					sendMessage(successor.hostName, FAILURE, node);
-				} catch (UnknownHostException e) {
-					e.printStackTrace();
+			synchronized (successors) {
+				for (Node successor : successors) {
+					try {
+						sendMessage(successor.hostName, FAILURE, node);
+					} catch (UnknownHostException e) {
+						e.printStackTrace();
+					}
 				}
 			}
+
 			writeLogs("Failure:", node);
 		}
 
@@ -251,32 +277,39 @@ public class DGM {
 	 * and change heart beat target
 	 */
 	private void selectNeighbors() {
-		successors.clear();
-		int index = (thisNode.hashID + 1) % 128;
-		while (successors.size() < 5 && index != thisNode.hashID) {
-			if (membershipList[index] != null)
-				successors.add(membershipList[index]);
-			index = (index + 1) % 128;
-		}
+		synchronized (membershipList) {
+			successors.clear();
+			int index = (thisNode.hashID + 1) % 128;
+			while (successors.size() < 5 && index != thisNode.hashID) {
+				if (membershipList[index] != null)
+					successors.add(membershipList[index]);
+				index = (index + 1) % 128;
+			}
 
-		predecessors.clear();
-		index = thisNode.hashID == 0 ? 127 : thisNode.hashID - 1;
-		while (predecessors.size() < 5 && index != thisNode.hashID) {
-			if (membershipList[index] != null)
-				predecessors.add(membershipList[index]);
-			index = index == 0 ? 127 : index - 1;
+			predecessors.clear();
+			index = thisNode.hashID == 0 ? 127 : thisNode.hashID - 1;
+			while (predecessors.size() < 5 && index != thisNode.hashID) {
+				if (membershipList[index] != null)
+					predecessors.add(membershipList[index]);
+				index = index == 0 ? 127 : index - 1;
+			}
 		}
+		synchronized (heartbeatCnt) {
+			ConcurrentHashMap<Integer, Long> temp = heartbeatCnt;
+			synchronized (predecessors) {
+				heartbeatCnt = new ConcurrentHashMap<>();
+				for (Node predecessor : predecessors) {
+					if (temp.containsKey(predecessor.hashID))
+						heartbeatCnt.put(predecessor.hashID, temp.get(predecessor.hashID));
+					else {
+						heartbeatCnt.put(predecessor.hashID, System.currentTimeMillis());
+					}
 
-		HashMap<Integer, Long> temp = heartbeatCnt;
-		heartbeatCnt = new HashMap<>();
-		for (Node predecessor : predecessors) {
-			if (temp.containsKey(predecessor.hashID))
-				heartbeatCnt.put(predecessor.hashID, temp.get(predecessor.hashID));
-			else {
-				heartbeatCnt.put(predecessor.hashID, System.currentTimeMillis());
+				}
 			}
 
 		}
+
 	}
 
 	private void writeLogs(String event, Node node) {
@@ -298,6 +331,7 @@ public class DGM {
 	private final int NEWMEMBER = 3;
 	private final int LEAVE = 4;
 	private final int FAILURE = 5;
+
 	private final int SERVER_PORT = 8399;
 
 	// member-variables
@@ -311,7 +345,7 @@ public class DGM {
 	private Thread heartBeatThread;
 	private Thread messageHandlerThread;
 	private Thread failureDetectorThread;
-	private HashMap<Integer, Long> heartbeatCnt = new HashMap<>();
+	private ConcurrentHashMap<Integer, Long> heartbeatCnt;
 
 	public static void main(String[] args) {
 
@@ -361,10 +395,13 @@ public class DGM {
 	private void showList() {
 		if (in_group) {
 			System.out.println("Membership list of " + thisNode.hostName + "=======");
-			for (Node node : membershipList) {
-				if (node != null)
-					System.out.println(node.hostName + " " + node.timestamp);
+			synchronized (failureDetectorThread) {
+				for (Node node : membershipList) {
+					if (node != null)
+						System.out.println(node.hostName + " " + node.timestamp);
+				}
 			}
+
 		} else
 			System.out.println("Please join the group first!");
 	}
@@ -377,15 +414,18 @@ public class DGM {
 
 		// DatagramSocket ds = new DatagramSocket(SERVER_PORT);
 		// Send the leave message to the successors
-		for (Node successor : successors) {
-			try {
-				sendMessage(successor.hostName, LEAVE, thisNode);
-			} catch (UnknownHostException e) {
-				e.printStackTrace();
-				System.out.println("Can't find the destination host: " + successor.hostName);
-			}
+		synchronized (successors) {
+			for (Node successor : successors) {
+				try {
+					sendMessage(successor.hostName, LEAVE, thisNode);
+				} catch (UnknownHostException e) {
+					e.printStackTrace();
+					System.out.println("Can't find the destination host: " + successor.hostName);
+				}
 
+			}
 		}
+
 		nodeReset();
 
 	}
@@ -456,6 +496,7 @@ public class DGM {
 		thisNode = new Node();
 		successors = new ArrayList<>();
 		predecessors = new ArrayList<>();
+		heartbeatCnt = new ConcurrentHashMap<>();
 		// numOfMembers = 1;
 		in_group = true;
 		heartBeatThread = new Thread(new HeartBeatThread());
@@ -463,28 +504,7 @@ public class DGM {
 		failureDetectorThread = new Thread(new FailureDetectorThread());
 
 		membershipList[thisNode.hashID] = thisNode;
-
-		// if not introducer, send a request to the introducer for joining
-		// the
-		// group
-
-		// if (!is_introducer) {
-		// List<Node> memberList = sendJoinReq(thisNode);
-		// for (Node node : memberList) {
-		// membershipList.add(node.hashID, node);
-		// numOfMembers++;
-		// }
-		//
-		// }
 	}
-
-	/*
-	 * Send joining request to the introducer
-	 * 
-	 * @param node: node information about itself
-	 * 
-	 * @return the membership list of the introducer
-	 */
 
 	/*
 	 * Get the host name of the node
@@ -517,7 +537,7 @@ public class DGM {
 	 * @return timestamp as string
 	 */
 	public String getTimestamp() {
-		// Timestamp has millis while SimpleDateFormat don't
+		// Timestamp has millis while SimpleDateFormat not
 		Timestamp timestamp = new Timestamp(System.currentTimeMillis());
 		return timestamp.toString();
 	}
