@@ -305,6 +305,8 @@ public class DGM {
 				System.out.println("I'm the introducer. Group created!");
 				in_group = true;
 			}
+			else
+				System.out.println("Rejoin the group");
 		}
 	}
 
@@ -419,7 +421,6 @@ public class DGM {
 	 */
 	public void memberLeave(Node node) {
 		if (membershipList[node.hashID] != null) {
-			System.out.println("Node Leaving!" + membershipList[node.hashID].hostName);
 			synchronized (successors) {
 				for (Node successor : successors) {
 					try {
@@ -443,7 +444,6 @@ public class DGM {
 	public void addMember(Node node) {
 		if (membershipList[node.hashID] == null) {
 			membershipList[node.hashID] = node;
-			System.out.println("New Member! " + membershipList[node.hashID].hostName);
 			synchronized (successors) {
 				for (Node successor : successors) {
 					try {
@@ -464,7 +464,6 @@ public class DGM {
 		synchronized (membershipList) {
 			membershipList[node.hashID] = node;
 		}
-		System.out.println("Membership List received! " + node.hostName);
 		selectNeighbors();
 	}
 
@@ -473,7 +472,6 @@ public class DGM {
 			for (Node member : membershipList) {
 				try {
 					if (member != null) {
-						System.out.println("sending membership list: " + member.hostName);
 						sendMessage(node.hostName, MEMBERSHIPLIST, member);
 					}
 				} catch (UnknownHostException e) {
@@ -486,7 +484,6 @@ public class DGM {
 		synchronized (successors) {
 			for (Node successor : successors) {
 				try {
-					System.out.println("Sending new group to " + successor.hostName);
 					sendMessage(successor.hostName, NEWMEMBER, node);
 				} catch (UnknownHostException e) {
 					e.printStackTrace();
