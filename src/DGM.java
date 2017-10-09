@@ -284,10 +284,14 @@ public class DGM {
 			System.out.println("This node is already in the group!");
 			return;
 		}
-		initializeDGM();
-		heartBeatThread.start();
-		messageHandlerThread.start();
-		failureDetectorThread.start();
+
+		if (heartBeatThread == null) {
+			initializeDGM();
+			heartBeatThread.start();
+			messageHandlerThread.start();
+			failureDetectorThread.start();
+		}
+
 		if (!is_introducer) {
 			try {
 				sendMessage("fa17-cs425-g15-01.cs.illinois.edu", JOIN, thisNode);
