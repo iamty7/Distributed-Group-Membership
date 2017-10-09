@@ -27,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DGM {
 
 	/*
-	 * Node in the membership list
+	 * Node in the membership list and messages
 	 */
 	private class Node {
 		private String hostName;
@@ -45,16 +45,18 @@ public class DGM {
 			while (membershipList[hashID] != null) {
 				hashID = (hashID + 1) % 128;
 			}
-
 		}
 	}
 
+	/*
+	 * Thread for heartbeating
+	 */
 	private class HeartBeatThread implements Runnable {
 
 		@Override
 		public void run() {
 			try {
-				while (in_group) {
+				while (!goingToLeave) {
 					synchronized (successors) {
 						for (Node node : successors) {
 							sendMessage(node.hostName, HEARTBEAT, thisNode);
@@ -74,6 +76,9 @@ public class DGM {
 
 	}
 
+	/*
+	 * Thread for handling the received messages
+	 */
 	private class MessageHandlerThread implements Runnable {
 
 		@Override
@@ -83,7 +88,7 @@ public class DGM {
 			try {
 				DatagramSocket ds = new DatagramSocket(SERVER_PORT);
 				DatagramPacket dp_receive = new DatagramPacket(buf, 1024);
-				while (in_group) {
+				while (!goingToLeave) {
 					ds.receive(dp_receive);
 					String[] message = new String(dp_receive.getData()).split("\n");
 					int messageType = Integer.parseInt(message[0]);
@@ -126,13 +131,16 @@ public class DGM {
 
 	}
 
+	/*
+	 * Thread for failure detection
+	 */
 	private class FailureDetectorThread implements Runnable {
 
 		@Override
 		public void run() {
 
 			try {
-				while (in_group) {
+				while (!goingToLeave) {
 
 					for (Integer key : heartbeatCnt.keySet()) {
 						long curTime = System.currentTimeMillis();
@@ -145,7 +153,7 @@ public class DGM {
 					Thread.currentThread().sleep(1000);
 				}
 			} catch (InterruptedException e) {
-				
+
 			}
 		}
 
@@ -155,9 +163,256 @@ public class DGM {
 	 * Constructor of Class DGM
 	 */
 	public DGM() {
+		// implemented in the initializeDGM method
+	}
+
+	// message type
+	private final int HEARTBEAT = 0;
+	private final int JOIN = 1;
+	private final int MEMBERSHIPLIST = 2;
+	private final int NEWMEMBER = 3;
+	private final int LEAVE = 4;
+	private final int FAILURE = 5;
+
+	private final int SERVER_PORT = 8399;
+
+	// member-variables
+	private boolean is_introducer;
+	private Node[] membershipList;
+	private Node thisNode;
+	private List<Node> successors;
+	private List<Node> predecessors;
+	private boolean in_group;
+	private boolean goingToLeave;
+	private Thread heartBeatThread;
+	private Thread messageHandlerThread;
+	private Thread failureDetectorThread;
+	private ConcurrentHashMap<Integer, Long> heartbeatCnt;
+
+	public static void main(String[] args) {
+
+		DGM dgm = new DGM();
+		dgm.start();
+	}
+
+	/*
+	 * Starts to take commands from users
+	 */
+	private void start() {
+		Scanner keyboard = new Scanner(System.in);
+		String command;
+		while (true) {
+			System.out.print("Your command(join, leave, showlist, showid):");
+			command = keyboard.nextLine();
+			switch (command) {
+			case "join":
+				joinGroup();
+				break;
+			case "leave":
+				leaveGroup();
+				break;
+			case "showlist":
+				showList();
+				break;
+			case "showid":
+				showID();
+				break;
+			default:
+				break;
+			}
+		}
 
 	}
 
+	/*
+	 * Show the ID of the node(HostName and its time stamp)
+	 */
+	private void showID() {
+		if (in_group)
+			System.out.println("ID: " + thisNode.hostName + " " + thisNode.timestamp);
+		else
+			System.out.println("Please join the group first!");
+	}
+
+	/*
+	 * Show the membership list of the node
+	 */
+	private void showList() {
+		if (in_group) {
+			System.out.println("Membership list of " + thisNode.hostName + "=======");
+			synchronized (failureDetectorThread) {
+				for (Node node : membershipList) {
+					if (node != null)
+						System.out.println(node.hostName + " " + node.timestamp);
+				}
+			}
+
+		} else
+			System.out.println("Please join the group first!");
+	}
+
+	/*
+	 * Leave the group and send the leave message to its successors
+	 */
+	private void leaveGroup() {
+		if (!in_group) {
+			System.out.println("You haven't joined a group!");
+			return;
+		}
+
+		// DatagramSocket ds = new DatagramSocket(SERVER_PORT);
+		// Send the leave message to the successors
+		synchronized (successors) {
+			for (Node successor : successors) {
+				try {
+					sendMessage(successor.hostName, LEAVE, thisNode);
+				} catch (UnknownHostException e) {
+					e.printStackTrace();
+					System.out.println("Can't find the destination host: " + successor.hostName);
+				}
+
+			}
+		}
+		nodeReset();
+	}
+
+	/*
+	 * Send a request to the introducer
+	 */
+	private void joinGroup() {
+		if (in_group) {
+			System.out.println("This node is already in the group!");
+			return;
+		}
+		initializeDGM();
+		heartBeatThread.start();
+		messageHandlerThread.start();
+		failureDetectorThread.start();
+		if (!is_introducer) {
+			try {
+				sendMessage("fa17-cs425-g15-01.cs.illinois.edu", JOIN, thisNode);
+			} catch (UnknownHostException e) {
+				e.printStackTrace();
+				// System.out.println("The introducer is down! Can't join the
+				// group!");
+			}
+		} else {
+			if (!searchGroup()) {
+				System.out.println("I'm the introducer. Group created!");
+				in_group = true;
+			}
+		}
+	}
+
+	/*
+	 * Search the existing group in the network
+	 */
+	private boolean searchGroup() {
+		String s1 = "fa17-cs425-g15-";
+		String s2 = ".cs.illinois.edu";
+		for (int i = 2; i <= 10; i++) {
+			try {
+				if (i < 10)
+					sendMessage(s1 + "0" + i + s2, JOIN, thisNode);
+				else
+					sendMessage(s1 + i + s2, JOIN, thisNode);
+			} catch (UnknownHostException e) {
+				e.printStackTrace();
+			}
+			try {
+				Thread.currentThread().sleep(200);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+			if (in_group) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/*
+	 * Initialize member variables of this node
+	 * 
+	 * @param string: host name
+	 */
+	private void initializeDGM() {
+		// Judge if this vm is the introducer
+		if (getHostName().equals("fa17-cs425-g15-01.cs.illinois.edu"))
+			is_introducer = true;
+		else
+			is_introducer = false;
+
+		membershipList = new Node[128];
+		thisNode = new Node();
+		successors = new ArrayList<>();
+		predecessors = new ArrayList<>();
+		heartbeatCnt = new ConcurrentHashMap<>();
+		// numOfMembers = 1;
+		// in_group = true;
+		goingToLeave = false;
+		heartBeatThread = new Thread(new HeartBeatThread());
+		messageHandlerThread = new Thread(new MessageHandlerThread());
+		failureDetectorThread = new Thread(new FailureDetectorThread());
+
+		membershipList[thisNode.hashID] = thisNode;
+	}
+
+	/*
+	 * Send a message to another node
+	 * 
+	 * @param destination: the host name of the target node
+	 * 
+	 * @param messageType: heartbeat, join, membershiplist, newmember, leave or
+	 * failure
+	 * 
+	 * @param node: the node of the event
+	 */
+	private void sendMessage(String destination, int messageType, Node node) throws UnknownHostException {
+		DatagramSocket ds;
+		try {
+			ds = new DatagramSocket();
+			InetAddress serverAddress = InetAddress.getByName(destination);
+			String message = nodeToMessage(messageType, node);
+			DatagramPacket dp_send = new DatagramPacket(message.getBytes(), message.length(), serverAddress,
+					SERVER_PORT);
+			ds.send(dp_send);
+			ds.close();
+		} catch (SocketException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+	}
+
+	/*
+	 * 
+	 */
+	private void nodeReset() {
+		// heartBeatThread.interrupt();
+		// messageHandlerThread.interrupt();
+		// failureDetectorThread.interrupt();
+		goingToLeave = true;
+		in_group = false;
+	}
+
+	/*
+	 * Convert the message and the node information to a string of message
+	 * 
+	 * @param messageType: type of the message
+	 * 
+	 * @param node: the node of the event
+	 */
+	private String nodeToMessage(int messageType, Node node) {
+		String message = messageType + "\n" + node.hostName + "\n" + node.timestamp + "\n" + node.hashID + "\n";
+		return message;
+	}
+
+	/*
+	 * Delete the node from local membership list and send the leave message to
+	 * its successors
+	 */
 	public void memberLeave(Node node) {
 		if (membershipList[node.hashID] != null) {
 			System.out.println("Node Leaving!" + membershipList[node.hashID].hostName);
@@ -177,6 +432,10 @@ public class DGM {
 		}
 	}
 
+	/*
+	 * Add the node to the local membership list and send the new group member
+	 * message to its successors
+	 */
 	public void addMember(Node node) {
 		if (membershipList[node.hashID] == null) {
 			membershipList[node.hashID] = node;
@@ -197,9 +456,11 @@ public class DGM {
 	}
 
 	public void initMembershipList(Node node) {
+		in_group = true;
 		synchronized (membershipList) {
 			membershipList[node.hashID] = node;
 		}
+		System.out.println("Membership List received! " + node.hostName);
 		selectNeighbors();
 	}
 
@@ -243,6 +504,9 @@ public class DGM {
 
 	}
 
+	/*
+	 * Mark a node as failure and the send the failure message to its successors
+	 */
 	public void markAsFailure(Integer hashID) {
 		if (membershipList[hashID] != null) {
 			Node node = membershipList[hashID];
@@ -322,188 +586,6 @@ public class DGM {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-	}
-
-	// message type
-	private final int HEARTBEAT = 0;
-	private final int JOIN = 1;
-	private final int MEMBERSHIPLIST = 2;
-	private final int NEWMEMBER = 3;
-	private final int LEAVE = 4;
-	private final int FAILURE = 5;
-
-	private final int SERVER_PORT = 8399;
-
-	// member-variables
-	private boolean is_introducer;
-	private Node[] membershipList;
-	// private int numOfMembers;
-	private Node thisNode;
-	private List<Node> successors;
-	private List<Node> predecessors;
-	private boolean in_group;
-	private Thread heartBeatThread;
-	private Thread messageHandlerThread;
-	private Thread failureDetectorThread;
-	private ConcurrentHashMap<Integer, Long> heartbeatCnt;
-
-	public static void main(String[] args) {
-
-		// !!!! if the hostname is the domain name, we do not need to pass
-		// args
-		// to the initialization to decide weather it's the introducer
-		DGM dgm = new DGM();
-		dgm.start();
-	}
-
-	/*
-	 *  
-	 */
-	private void start() {
-		Scanner keyboard = new Scanner(System.in);
-		String command;
-		while (true) {
-			System.out.print("Your command(join, leave, showlist, showid):");
-			command = keyboard.nextLine();
-			switch (command) {
-			case "join":
-				joinGroup();
-				break;
-			case "leave":
-				leaveGroup();
-				break;
-			case "showlist":
-				showList();
-				break;
-			case "showid":
-				showID();
-				break;
-			default:
-				break;
-			}
-		}
-
-	}
-
-	private void showID() {
-		if (in_group)
-			System.out.println("ID: " + thisNode.hostName + " " + thisNode.timestamp);
-		else
-			System.out.println("Please join the group first!");
-	}
-
-	private void showList() {
-		if (in_group) {
-			System.out.println("Membership list of " + thisNode.hostName + "=======");
-			synchronized (failureDetectorThread) {
-				for (Node node : membershipList) {
-					if (node != null)
-						System.out.println(node.hostName + " " + node.timestamp);
-				}
-			}
-
-		} else
-			System.out.println("Please join the group first!");
-	}
-
-	private void leaveGroup() {
-		if (!in_group) {
-			System.out.println("You haven't joined a group!");
-			return;
-		}
-
-		// DatagramSocket ds = new DatagramSocket(SERVER_PORT);
-		// Send the leave message to the successors
-		synchronized (successors) {
-			for (Node successor : successors) {
-				try {
-					sendMessage(successor.hostName, LEAVE, thisNode);
-				} catch (UnknownHostException e) {
-					e.printStackTrace();
-					System.out.println("Can't find the destination host: " + successor.hostName);
-				}
-
-			}
-		}
-
-		nodeReset();
-
-	}
-
-	private void sendMessage(String destination, int messageType, Node node) throws UnknownHostException {
-		DatagramSocket ds;
-		try {
-			ds = new DatagramSocket();
-			InetAddress serverAddress = InetAddress.getByName(destination);
-			String message = nodeToMessage(messageType, node);
-			DatagramPacket dp_send = new DatagramPacket(message.getBytes(), message.length(), serverAddress,
-					SERVER_PORT);
-			ds.send(dp_send);
-			ds.close();
-		} catch (SocketException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-
-	}
-
-	private void nodeReset() {
-		// heartBeatThread.interrupt();
-		// messageHandlerThread.interrupt();
-		// failureDetectorThread.interrupt();
-		in_group = false;
-	}
-
-	private String nodeToMessage(int messageType, Node node) {
-		String message = messageType + "\n" + node.hostName + "\n" + node.timestamp + "\n" + node.hashID + "\n";
-		return message;
-	}
-
-	private void joinGroup() {
-		if (in_group) {
-			System.out.println("This node is already in the group!");
-			return;
-		}
-		initializeDGM();
-		heartBeatThread.start();
-		messageHandlerThread.start();
-		failureDetectorThread.start();
-		if (!is_introducer) {
-			try {
-				sendMessage("fa17-cs425-g15-01.cs.illinois.edu", JOIN, thisNode);
-			} catch (UnknownHostException e) {
-				e.printStackTrace();
-				System.out.println("The introducer is down! Can't join the group!");
-			}
-		} else
-			System.out.println("I'm the introducer. Group created!");
-	}
-
-	/*
-	 * Initialize member variables of this node
-	 * 
-	 * @param string: host name
-	 */
-	private void initializeDGM() {
-		// Judge if this vm is the introducer
-		if (getHostName().equals("fa17-cs425-g15-01.cs.illinois.edu"))
-			is_introducer = true;
-		else
-			is_introducer = false;
-
-		membershipList = new Node[128];
-		thisNode = new Node();
-		successors = new ArrayList<>();
-		predecessors = new ArrayList<>();
-		heartbeatCnt = new ConcurrentHashMap<>();
-		// numOfMembers = 1;
-		in_group = true;
-		heartBeatThread = new Thread(new HeartBeatThread());
-		messageHandlerThread = new Thread(new MessageHandlerThread());
-		failureDetectorThread = new Thread(new FailureDetectorThread());
-
-		membershipList[thisNode.hashID] = thisNode;
 	}
 
 	/*
