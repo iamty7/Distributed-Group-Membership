@@ -145,7 +145,6 @@ public class DGM {
 					for (Integer key : heartbeatCnt.keySet()) {
 						long curTime = System.currentTimeMillis();
 						if (curTime - heartbeatCnt.get(key) > 1000) {
-							System.out.println("Failure Detected! " + membershipList[key].hostName);
 							markAsFailure(key);
 						}
 					}
