@@ -16,7 +16,7 @@ Run the code:
 java DGM
 ```
 
-Then the command will show a prompt - "Your command(join, leave, showlist, showid):", so you can choose the show the ID or the membership list of the node but you have to get the node to join the group first. If you input a join command on the "introducer", the program will search the network to see if there is an existing group and join it if yes and create a new one if not.
+Then the command will show a prompt - "Your command(join, leave, showlist, showid):", so you can choose to show the ID or the membership list of the node but you have to get the node to join the group first. If you input a join command on the "introducer", the program will search the network to see if there is an existing group and join it if yes and create a new one if not.
 
 ##### False positive rate measurement:
 
@@ -27,4 +27,4 @@ javac DGM_FP.java
 java DGM_FP 3
 ```
 
-Note: 3 represents for the message loss rate. You can choose to input 10 or 30 instead.
+Note: 3 represents for the message loss rate. You can choose to input 10 or 30 instead. If a failure is detected, it will be recorded in the log file.
