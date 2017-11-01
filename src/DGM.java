@@ -400,6 +400,12 @@ public class DGM {
 		// failureDetectorThread.interrupt();
 		goingToLeave = true;
 		in_group = false;
+		try {
+			Thread.currentThread().sleep(200);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+		heartBeatThread = null;
 	}
 
 	/*
