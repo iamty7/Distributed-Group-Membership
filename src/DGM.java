@@ -173,6 +173,7 @@ public class DGM {
 	private final int LEAVE = 4;
 	private final int FAILURE = 5;
 
+
 	private final int SERVER_PORT = 8399;
 
 	// member-variables
